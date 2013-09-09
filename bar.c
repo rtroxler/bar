@@ -8,6 +8,8 @@
 #include <getopt.h>
 #include <unistd.h>
 #include <xcb/xcb.h>
+#include <X11/Xft/Xft.h>
+#include <X11/Xlib-xcb.h>
 
 #include "config.h"
 
@@ -18,6 +20,8 @@
 typedef struct fontset_item_t {
     xcb_font_t      xcb_ft;
     xcb_charinfo_t *table;
+    XftFont        *xft_ft;
+    int             ascent;
     int             descent;
     int             avg_height;
     unsigned short  char_max;
@@ -36,6 +40,7 @@ enum {
     ALIGN_R
 };
 
+static Display          *dpy;
 static xcb_connection_t *c;
 static xcb_window_t     win;
 static xcb_drawable_t   canvas;
@@ -47,8 +52,12 @@ static int              bar_bottom = BAR_BOTTOM;
 static int              force_docking = 0;
 static fontset_item_t   fontset[FONT_MAX]; 
 static fontset_item_t   *sel_font = NULL;
+static XftColor         sel_fg;
+static XftDraw          *xft_draw;
 
-static const unsigned   palette[] = {COLOR0,COLOR1,COLOR2,COLOR3,COLOR4,COLOR5,COLOR6,COLOR7,COLOR8,COLOR9,BACKGROUND,FOREGROUND};
+#define MAX_COLORS 12
+static const unsigned   palette[MAX_COLORS] = {COLOR0,COLOR1,COLOR2,COLOR3,COLOR4,COLOR5,COLOR6,COLOR7,COLOR8,COLOR9,BACKGROUND,FOREGROUND};
+static XftColor         xft_palette[MAX_COLORS];
 
 static inline void
 xcb_set_bg (int i)
@@ -60,6 +69,7 @@ xcb_set_bg (int i)
 static inline void
 xcb_set_fg (int i)
 {
+    sel_fg = xft_palette[i];
     xcb_change_gc (c, draw_gc , XCB_GC_FOREGROUND, (const uint32_t []){ palette[i] });
 }
 
@@ -80,7 +90,8 @@ xcb_set_fontset (int i)
 {
     if (sel_font != &fontset[i]) {
         sel_font = &fontset[i];
-        xcb_change_gc (c, draw_gc , XCB_GC_FONT, (const uint32_t []){ sel_font->xcb_ft });
+        if (sel_font->xcb_ft)
+            xcb_change_gc (c, draw_gc , XCB_GC_FONT, (const uint32_t []){ sel_font->xcb_ft });
     }
 }
 
@@ -89,9 +100,15 @@ draw_char (int x, int align, wchar_t ch)
 {
     int ch_width;
 
-    ch_width = (ch > sel_font->char_min && ch < sel_font->char_max) ?
-        sel_font->table[ch - sel_font->char_min].character_width    :
-        0;
+    if (sel_font->xft_ft) {
+        XGlyphInfo gi;
+        XftTextExtents16 (dpy, sel_font->xft_ft, (const FcChar16 *)&ch, 1, &gi);
+        ch_width = gi.xOff;
+    } else {
+        ch_width = (ch > sel_font->char_min && ch < sel_font->char_max) ?
+            sel_font->table[ch - sel_font->char_min].character_width    :
+            0;
+    }
 
     /* Some fonts (such as anorexia) have the space char with the width set to 0 */
     if (ch_width == 0)
@@ -113,12 +130,15 @@ draw_char (int x, int align, wchar_t ch)
     /* Draw the background first */
     xcb_fill_rect (clear_gc, x, 0, ch_width, BAR_HEIGHT);
 
-    /* xcb accepts string in UCS-2 BE, so swap */
-    ch = (ch >> 8) | (ch << 8);
-
     /* String baseline coordinates */
-    xcb_image_text_16 (c, 1, canvas, draw_gc, x, BAR_HEIGHT / 2 + sel_font->avg_height / 2 - sel_font->descent, 
-            (xcb_char2b_t *)&ch);
+    int y = BAR_HEIGHT / 2 + sel_font->avg_height / 2 - sel_font->descent;
+    if (sel_font->xft_ft) {
+        XftDrawString16 (xft_draw, &sel_fg, sel_font->xft_ft, x, y, &ch, 1);
+    } else {
+        /* xcb accepts string in UCS-2 BE, so swap */
+        ch = (ch >> 8) | (ch << 8);
+        xcb_image_text_16 (c, 1, canvas, draw_gc, x, y, (xcb_char2b_t *)&ch);
+    }
 
     /* Draw the underline */
     if (BAR_UNDERLINE_HEIGHT) 
@@ -192,7 +212,7 @@ parse (char *text)
             }
 
             /* The character is outside the main font charset, use the fallback */
-            if (t < fontset[FONT_MAIN].char_min || t > fontset[FONT_MAIN].char_max)
+            if (fontset[FONT_MAIN].xcb_ft && (t < fontset[FONT_MAIN].char_min || t > fontset[FONT_MAIN].char_max))
                 xcb_set_fontset (FONT_FALLBACK);
             else
                 xcb_set_fontset (FONT_MAIN);
@@ -214,24 +234,29 @@ font_load (const char **font_list)
     max_height = -1;
 
     for (int i = 0; i < FONT_MAX; i++) {
+        fontset[i].xcb_ft = 0;
+        fontset[i].xft_ft = 0;
         font = xcb_generate_id (c);
 
         cookie = xcb_open_font_checked (c, font, strlen (font_list[i]), font_list[i]);
-        if (xcb_request_check (c, cookie)) {
+        if (!xcb_request_check (c, cookie)) {
+            queryreq = xcb_query_font (c, font);
+            font_info = xcb_query_font_reply (c, queryreq, NULL);
+
+            fontset[i].xcb_ft  = font;
+            fontset[i].table   = xcb_query_font_char_infos (font_info);
+            fontset[i].ascent  = font_info->font_ascent;
+            fontset[i].descent = font_info->font_descent;
+            fontset[i].char_max= font_info->max_byte1 << 8 | font_info->max_char_or_byte2;
+            fontset[i].char_min= font_info->min_byte1 << 8 | font_info->min_char_or_byte2;
+        } else if (fontset[i].xft_ft = XftFontOpenName (dpy, DefaultScreen(dpy), font_list[i])) {
+            fontset[i].ascent  = fontset[i].xft_ft->ascent;
+            fontset[i].descent = fontset[i].xft_ft->descent;
+        } else {
             fprintf (stderr, "Could not load font %s\n", font_list[i]);
             return 1;
         }
-
-        queryreq = xcb_query_font (c, font);
-        font_info = xcb_query_font_reply (c, queryreq, NULL);
-
-        fontset[i].xcb_ft  = font;
-        fontset[i].table   = xcb_query_font_char_infos (font_info);
-        fontset[i].descent = font_info->font_descent;
-        fontset[i].char_max= font_info->max_byte1 << 8 | font_info->max_char_or_byte2;
-        fontset[i].char_min= font_info->min_byte1 << 8 | font_info->min_char_or_byte2;
-
-        max_height = MAX(font_info->font_ascent + font_info->font_descent, max_height);
+        max_height = MAX(fontset[i].ascent + fontset[i].descent, max_height);
     }
 
     /* To have an uniform alignment */
@@ -312,8 +337,10 @@ init (void)
     int y;
 
     /* Connect to X */
-    c = xcb_connect (NULL, NULL);
-    if (xcb_connection_has_error (c)) {
+    if ((dpy = XOpenDisplay(0)) == NULL)
+        fprintf (stderr, "Couldn't open display\n");
+
+    if ((c = XGetXCBConnection(dpy)) == NULL) {
         fprintf (stderr, "Couldn't connect to X\n");
         exit (1);
     }
@@ -355,6 +382,24 @@ init (void)
     underl_gc = xcb_generate_id (c);
     xcb_create_gc (c, underl_gc, root, XCB_GC_FOREGROUND, (const uint32_t []){ palette[10] });
 
+    /* Initialise the xft colors */
+    int i;
+    for (i = 0; i < MAX_COLORS; i++) {
+        char color[8] = "#000000";
+        snprintf(color, sizeof(color), "#%06X", palette[i]);
+        if (!XftColorAllocName (dpy, DefaultVisual(dpy, DefaultScreen(dpy)), DefaultColormap(dpy, DefaultScreen(dpy)), color, xft_palette + i)) {
+            fprintf(stderr, "Couldn't allocate xft font color '%s'\n", color);
+        }
+    }
+
+    /* Create xft drawable */
+    if (fontset[FONT_MAIN].xft_ft || fontset[FONT_FALLBACK].xft_ft) {
+        int screen = DefaultScreen (dpy);
+        if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen)))) {
+            fprintf(stderr, "Couldn't create xft drawable\n");
+        }
+    }
+
     /* Make the bar visible */
     xcb_map_window (c, win);
 
@@ -368,6 +413,12 @@ cleanup (void)
     for (i = 0; i < FONT_MAX; i++) {
         if (fontset[i].xcb_ft)
             xcb_close_font (c, fontset[i].xcb_ft);
+        else if (fontset[i].xft_ft)
+            XftFontClose (dpy, fontset[i].xft_ft);
+    }
+    XftDrawDestroy (xft_draw);
+    for (i = 0; i < MAX_COLORS; i++) {
+        XftColorFree (dpy, DefaultVisual(dpy, DefaultScreen(dpy)), DefaultColormap(dpy, DefaultScreen(dpy)), xft_palette + i);
     }
     if (canvas)
         xcb_free_pixmap (c, canvas);
