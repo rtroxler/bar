@@ -102,7 +102,7 @@ draw_char (int x, int align, wchar_t ch)
 
     if (sel_font->xft_ft) {
         XGlyphInfo gi;
-        XftTextExtents16 (dpy, sel_font->xft_ft, (const FcChar16 *)&ch, 1, &gi);
+        XftTextExtents16 (dpy, sel_font->xft_ft, &ch, 1, &gi);
         ch_width = gi.xOff;
     } else {
         ch_width = (ch > sel_font->char_min && ch < sel_font->char_max) ?
@@ -193,6 +193,7 @@ parse (char *text)
                 }
         } else { /* utf-8 -> ucs-2 */
             wchar_t t;
+            char *t1 = p;
 
             if (!(p[0] & 0x80)) {
                 t  = p[0]; 
@@ -212,7 +213,7 @@ parse (char *text)
             }
 
             /* The character is outside the main font charset, use the fallback */
-            if (fontset[FONT_MAIN].xcb_ft && (t < fontset[FONT_MAIN].char_min || t > fontset[FONT_MAIN].char_max))
+            if ((fontset[FONT_MAIN].xcb_ft && (t < fontset[FONT_MAIN].char_min || t > fontset[FONT_MAIN].char_max)) || (fontset[FONT_MAIN].xft_ft && !XftCharExists(dpy, fontset[FONT_MAIN].xft_ft, t)))
                 xcb_set_fontset (FONT_FALLBACK);
             else
                 xcb_set_fontset (FONT_MAIN);
@@ -391,6 +392,7 @@ init (void)
             fprintf(stderr, "Couldn't allocate xft font color '%s'\n", color);
         }
     }
+    sel_fg = xft_palette[11];
 
     /* Create xft drawable */
     if (fontset[FONT_MAIN].xft_ft || fontset[FONT_FALLBACK].xft_ft) {
