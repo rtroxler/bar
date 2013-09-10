@@ -260,6 +260,7 @@ parse (char *text)
                 if ((fontset[i].xcb_ft && (t < fontset[i].char_min || t > fontset[i].char_max)) ||
                     (fontset[i].xft_ft && !XftCharExists(dpy, fontset[i].xft_ft, t))) continue;
                 xcb_set_fontset (i);
+                break;
             }
 
             pos_x += draw_char (screen, pos_x, align, t);
