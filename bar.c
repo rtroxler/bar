@@ -28,11 +28,7 @@ typedef struct fontset_item_t {
     unsigned short  char_min;
 } fontset_item_t;
 
-enum {
-    FONT_MAIN,
-    FONT_FALLBACK,
-    FONT_MAX
-};
+#define FONT_MAX 4
 
 enum {
     ALIGN_L = 0,
@@ -50,6 +46,7 @@ static xcb_gcontext_t   underl_gc;
 static int              bar_width;
 static int              bar_bottom = BAR_BOTTOM;
 static int              force_docking = 0;
+static int              fontset_count;
 static fontset_item_t   fontset[FONT_MAX]; 
 static fontset_item_t   *sel_font = NULL;
 static XftColor         sel_fg;
@@ -213,10 +210,11 @@ parse (char *text)
             }
 
             /* The character is outside the main font charset, use the fallback */
-            if ((fontset[FONT_MAIN].xcb_ft && (t < fontset[FONT_MAIN].char_min || t > fontset[FONT_MAIN].char_max)) || (fontset[FONT_MAIN].xft_ft && !XftCharExists(dpy, fontset[FONT_MAIN].xft_ft, t)))
-                xcb_set_fontset (FONT_FALLBACK);
-            else
-                xcb_set_fontset (FONT_MAIN);
+            for (int i = 0; i < fontset_count; i++) {
+                if ((fontset[i].xcb_ft && (t < fontset[i].char_min || t > fontset[i].char_max)) ||
+                    (fontset[i].xft_ft && !XftCharExists(dpy, fontset[i].xft_ft, t))) continue;
+                xcb_set_fontset (i);
+            }
 
             pos_x += draw_char (pos_x, align, t);
         }
@@ -234,7 +232,7 @@ font_load (const char **font_list)
 
     max_height = -1;
 
-    for (int i = 0; i < FONT_MAX; i++) {
+    for (int i = 0; i < FONT_MAX && font_list[i]; i++) {
         fontset[i].xcb_ft = 0;
         fontset[i].xft_ft = 0;
         font = xcb_generate_id (c);
@@ -258,10 +256,11 @@ font_load (const char **font_list)
             return 1;
         }
         max_height = MAX(fontset[i].ascent + fontset[i].descent, max_height);
+        fontset_count++;
     }
 
     /* To have an uniform alignment */
-    for (int i = 0; i < FONT_MAX; i++)
+    for (int i = 0; i < fontset_count; i++)
         fontset[i].avg_height = max_height;
 
     return 0;
@@ -355,7 +354,7 @@ init (void)
     bar_width = (BAR_WIDTH < 0) ? (scr->width_in_pixels - BAR_OFFSET) : BAR_WIDTH;
 
     /* Load the font */
-    if (font_load ((const char* []){ BAR_FONT }))
+    if (font_load ((const char* []){ BAR_FONT, NULL }))
         exit (1);
 
     /* Create the main window */
@@ -395,11 +394,9 @@ init (void)
     sel_fg = xft_palette[11];
 
     /* Create xft drawable */
-    if (fontset[FONT_MAIN].xft_ft || fontset[FONT_FALLBACK].xft_ft) {
-        int screen = DefaultScreen (dpy);
-        if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen)))) {
-            fprintf(stderr, "Couldn't create xft drawable\n");
-        }
+    int screen = DefaultScreen (dpy);
+    if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen)))) {
+        fprintf(stderr, "Couldn't create xft drawable\n");
     }
 
     /* Make the bar visible */
@@ -412,7 +409,7 @@ void
 cleanup (void)
 {
     int i;
-    for (i = 0; i < FONT_MAX; i++) {
+    for (i = 0; i < fontset_count; i++) {
         if (fontset[i].xcb_ft)
             xcb_close_font (c, fontset[i].xcb_ft);
         else if (fontset[i].xft_ft)
