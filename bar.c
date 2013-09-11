@@ -234,7 +234,7 @@ parse (char *text)
                 }
         } else { /* utf-8 -> utf-32 */
             wchar_t t;
-            int len = utf8decode(p, &t);
+            p += utf8decode(p, &t);
 
             /* The character is outside the main font charset, use the fallback */
             xcb_set_fontset (0);
@@ -247,7 +247,6 @@ parse (char *text)
             }
 
             pos_x += draw_char (pos_x, align, t);
-            p += len;
         }
     }
 }
