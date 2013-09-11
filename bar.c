@@ -116,7 +116,7 @@ draw_char (screen_t *screen, int x, int align, wchar_t ch)
 
     if (sel_font->xft_ft) {
         XGlyphInfo gi;
-        XftTextExtents16 (dpy, sel_font->xft_ft, &ch, 1, &gi);
+        XftTextExtents32 (dpy, sel_font->xft_ft, &ch, 1, &gi);
         ch_width = gi.xOff;
     } else {
         ch_width = (ch > sel_font->char_min && ch < sel_font->char_max) ?
@@ -147,11 +147,10 @@ draw_char (screen_t *screen, int x, int align, wchar_t ch)
     /* String baseline coordinates */
     int y = BAR_HEIGHT / 2 + sel_font->avg_height / 2 - sel_font->descent;
     if (sel_font->xft_ft) {
-        XftDrawString16 (xft_draw, &sel_fg, sel_font->xft_ft, x + screen->x, y, &ch, 1);
+        XftDrawString32 (xft_draw, &sel_fg, sel_font->xft_ft, x + screen->x, y, &ch, 1);
     } else {
-        /* xcb accepts string in UCS-2 BE, so swap */
-        ch = (ch >> 8) | (ch << 8);
-        xcb_image_text_16 (c, 1, canvas, draw_gc, x + screen->x, y, (xcb_char2b_t *)&ch);
+        char c_ = ch > 127 ? ' ' : ch;
+        xcb_image_text_8 (c, 1, canvas, draw_gc, x + screen->x, y, &c_);
     }
 
     /* Draw the underline */
@@ -159,6 +158,51 @@ draw_char (screen_t *screen, int x, int align, wchar_t ch)
         xcb_fill_rect (underl_gc, x + screen->x, BAR_UNDERLINE*(BAR_HEIGHT-BAR_UNDERLINE_HEIGHT), ch_width, BAR_UNDERLINE_HEIGHT);
 
     return ch_width;
+}
+
+int
+utf8decode(char *s, wchar_t *u) {
+    unsigned char c;
+    int i, n, rtn;
+
+    rtn = 1;
+    c = *s;
+    if(~c & 0x80) { /* 0xxxxxxx */
+        *u = c;
+        return rtn;
+    } else if((c & 0xE0) == 0xC0) { /* 110xxxxx */
+        *u = c & 0x1F;
+        n = 1;
+    } else if((c & 0xF0) == 0xE0) { /* 1110xxxx */
+        *u = c & 0x0F;
+        n = 2;
+    } else if((c & 0xF8) == 0xF0) { /* 11110xxx */
+        *u = c & 0x07;
+        n = 3;
+    } else {
+        goto invalid;
+    }
+
+    for(i = n, ++s; i > 0; --i, ++rtn, ++s) {
+        c = *s;
+        if((c & 0xC0) != 0x80) /* 10xxxxxx */
+            goto invalid;
+        *u <<= 6;
+        *u |= c & 0x3F;
+    }
+
+    if((n == 1 && *u < 0x80) ||
+       (n == 2 && *u < 0x800) ||
+       (n == 3 && *u < 0x10000) ||
+       (*u >= 0xD800 && *u <= 0xDFFF)) {
+        goto invalid;
+    }
+
+    return rtn;
+invalid:
+    *u = 0xFFFD;
+
+    return rtn;
 }
 
 void
@@ -234,36 +278,22 @@ parse (char *text)
                         pos_x = 0; 
                         break;
                 }
-        } else { /* utf-8 -> ucs-2 */
+        } else { /* utf-8 -> utf-32 */
             wchar_t t;
-            char *t1 = p;
-
-            if (!(p[0] & 0x80)) {
-                t  = p[0]; 
-                p += 1;
-            }
-            else if ((p[0] & 0xe0) == 0xc0 && (p[1] & 0xc0) == 0x80) {
-                t  = (p[0] & 0x1f) << 6 | (p[1] & 0x3f);
-                p += 2;
-            }
-            else if ((p[0] & 0xf0) == 0xe0 && (p[1] & 0xc0) == 0x80 && (p[2] & 0xc0) == 0x80) {
-                t  = (p[0] & 0xf) << 12 | (p[1] & 0x3f) << 6 | (p[2] & 0x3f);
-                p += 3;
-            }
-            else { /* ASCII chars > 127 go in the extended latin range */
-                t  = 0xc200 + p[0];
-                p += 1;
-            }
+            int len = utf8decode(p, &t);
 
             /* The character is outside the main font charset, use the fallback */
+            xcb_set_fontset (0);
             for (int i = 0; i < fontset_count; i++) {
-                if ((fontset[i].xcb_ft && (t < fontset[i].char_min || t > fontset[i].char_max)) ||
-                    (fontset[i].xft_ft && !XftCharExists(dpy, fontset[i].xft_ft, t))) continue;
+                fontset_item_t *f = fontset + i;
+                if ((f->xcb_ft && (*p < f->char_min || *p > f->char_max)) ||
+                    (f->xft_ft && !XftCharExists(dpy, f->xft_ft, *p))) continue;
                 xcb_set_fontset (i);
                 break;
             }
 
             pos_x += draw_char (screen, pos_x, align, t);
+            p += len;
         }
     }
 }

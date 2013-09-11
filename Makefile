@@ -1,6 +1,6 @@
 CC	?= gcc
 STRIP ?= strip
-CFLAGS = -std=c99 -fshort-wchar -Os -I/usr/include/freetype2
+CFLAGS = -std=c99 -Os -I/usr/include/freetype2
 LDFLAGS = -lxcb -lX11 -lX11-xcb -lXft -lfreetype -lz -lfontconfig
 XINERAMA ?= 0
 ifneq "$(XINERAMA)" "0"
