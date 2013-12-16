@@ -64,8 +64,11 @@ static screen_t         *screens;
 static int              num_screens;
 
 #define MAX_COLORS 12
+#define MAX_WIDTHS (1 << 16)
 static const unsigned   palette[MAX_COLORS] = {COLOR0,COLOR1,COLOR2,COLOR3,COLOR4,COLOR5,COLOR6,COLOR7,COLOR8,COLOR9,BACKGROUND,FOREGROUND};
 static XftColor         xft_palette[MAX_COLORS];
+static wchar_t          xft_char[MAX_WIDTHS];
+static char             xft_width[MAX_WIDTHS];
 
 #if XINERAMA
 static const char *control_characters = "fbulcsr";
@@ -109,15 +112,39 @@ xcb_set_fontset (int i)
     }
 }
 
+static inline int
+xft_char_width_slot (wchar_t ch)
+{
+    int slot = ch % MAX_WIDTHS;
+    while (xft_char[slot] != 0 && xft_char[slot] != ch)
+        slot = (slot + 1) % MAX_WIDTHS;
+    return slot;
+}
+
+int
+xft_char_width (wchar_t ch)
+{
+    int slot = xft_char_width_slot(ch);
+    if (!xft_char[slot]) {
+        XGlyphInfo gi;
+        XftTextExtents32 (dpy, sel_font->xft_ft, &ch, 1, &gi);
+        xft_char[slot] = ch;
+        xft_width[slot] = gi.xOff;
+        return gi.xOff;
+    } else if (xft_char[slot] == ch) {
+        return xft_width[slot];
+    } else {
+        return 0;
+    }
+}
+
 int
 draw_char (screen_t *screen, int x, int align, wchar_t ch)
 {
     int ch_width;
 
     if (sel_font->xft_ft) {
-        XGlyphInfo gi;
-        XftTextExtents32 (dpy, sel_font->xft_ft, &ch, 1, &gi);
-        ch_width = gi.xOff;
+        ch_width = xft_char_width(ch);
     } else {
         ch_width = (ch > sel_font->char_min && ch < sel_font->char_max) ?
             sel_font->table[ch - sel_font->char_min].character_width    :
@@ -439,6 +466,7 @@ init (void)
     bar_width = (BAR_WIDTH < 0) ? (scr->width_in_pixels - BAR_OFFSET) : BAR_WIDTH;
 
     /* Load the font */
+    memset(xft_char, 0, sizeof(xft_char));
     if (font_load ((const char* []){ BAR_FONT, NULL }))
         exit (1);
 
