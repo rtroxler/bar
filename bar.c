@@ -267,8 +267,8 @@ parse (char *text)
             xcb_set_fontset (0);
             for (int i = 0; i < fontset_count; i++) {
                 fontset_item_t *f = fontset + i;
-                if ((f->xcb_ft && (*p < f->char_min || *p > f->char_max)) ||
-                    (f->xft_ft && !XftCharExists(dpy, f->xft_ft, *p))) continue;
+                if ((f->xcb_ft && (t < f->char_min || t > f->char_max)) ||
+                    (f->xft_ft && !XftCharExists(dpy, f->xft_ft, t))) continue;
                 xcb_set_fontset (i);
                 break;
             }
