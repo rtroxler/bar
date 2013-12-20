@@ -241,6 +241,12 @@ parse (char *text)
     int align = 0;
     screen_t *screen = &screens[0];
 
+    /* Create xft drawable */
+    int screen = DefaultScreen (dpy);
+    if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen)))) {
+        fprintf(stderr, "Couldn't create xft drawable\n");
+    }
+
     xcb_fill_rect (clear_gc, 0, 0, bar_width, BAR_HEIGHT);
 
     for (;;) {
@@ -322,6 +328,8 @@ parse (char *text)
             pos_x += draw_char (screen, pos_x, align, t);
         }
     }
+
+    XftDrawDestroy (xft_draw);
 }
 
 int
@@ -564,12 +572,6 @@ init (void)
     }
     sel_fg = xft_palette[11];
 
-    /* Create xft drawable */
-    int screen = DefaultScreen (dpy);
-    if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen)))) {
-        fprintf(stderr, "Couldn't create xft drawable\n");
-    }
-
     /* Make the bar visible */
     xcb_map_window (c, win);
 
@@ -586,7 +588,6 @@ cleanup (void)
         else if (fontset[i].xft_ft)
             XftFontClose (dpy, fontset[i].xft_ft);
     }
-    XftDrawDestroy (xft_draw);
     for (i = 0; i < MAX_COLORS; i++) {
         XftColorFree (dpy, DefaultVisual(dpy, DefaultScreen(dpy)), DefaultColormap(dpy, DefaultScreen(dpy)), xft_palette + i);
     }
