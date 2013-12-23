@@ -242,8 +242,8 @@ parse (char *text)
     screen_t *screen = &screens[0];
 
     /* Create xft drawable */
-    int screen = DefaultScreen (dpy);
-    if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, screen), DefaultColormap(dpy, screen)))) {
+    int s = DefaultScreen (dpy);
+    if (!(xft_draw = XftDrawCreate (dpy, canvas, DefaultVisual(dpy, s), DefaultColormap(dpy, s)))) {
         fprintf(stderr, "Couldn't create xft drawable\n");
     }
 
