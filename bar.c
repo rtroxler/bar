@@ -251,9 +251,9 @@ parse (char *text)
 
     for (;;) {
         if (*p == '\0')
-            return;
+            break;
         if (*p == '\n')
-            return;
+            break;
 
         if (*p == '\\' && p++ && *p != '\\' && strchr (control_characters, *p)) {
                 switch (*p++) {
